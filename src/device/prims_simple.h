@@ -8,6 +8,25 @@
 #include "network/unpack/unpack.h"
 #include <cassert>
 
+#ifndef NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS 0
+#endif
+
+#ifndef NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY 8
+#endif
+
+__device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
+#if NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS > 0
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+  if (NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY <= 1 ||
+      (spins % NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY) == 0) {
+    __nanosleep(NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS);
+  }
+#endif
+#endif
+}
+
 enum primsMode {
   primsModeDefault = 0,
   primsModePatRs = 1,
@@ -115,6 +134,7 @@ class Primitives<
       int spins = 0;
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
+        ncclExperimentSimpleWaitBackoff(spins);
         if (checkAbort(flags, Aborted, spins)) break;
         //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
       }

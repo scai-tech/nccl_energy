@@ -28,6 +28,7 @@ struct Options {
   std::string csvPath;
   std::string modeLabel = "baseline";
   std::string collective = "allreduce";
+  bool allowMissingEnergy = false;
 };
 
 struct RunMetrics {
@@ -136,6 +137,7 @@ void PrintHelp(const char* program) {
       << "  --repeats=N           Measured repeats per size (default: 5)\n"
       << "  --csv=PATH            Append CSV results to PATH\n"
       << "  --mode-label=NAME     Label stored in logs and CSV (default: baseline)\n"
+      << "  --allow-missing-energy=0|1 Continue with energy=NA if NVML energy is unavailable (default: 0)\n"
       << "  --help                Print this message\n";
 }
 
@@ -174,6 +176,10 @@ bool ParseArgs(int argc, char** argv, Options* options) {
       options->csvPath = value;
     } else if (GetArgValue(argc, argv, &i, "--mode-label", &value)) {
       options->modeLabel = value;
+    } else if (GetArgValue(argc, argv, &i, "--allow-missing-energy", &value)) {
+      int parsed = 0;
+      if (!ParseInt(value, &parsed) || (parsed != 0 && parsed != 1)) return false;
+      options->allowMissingEnergy = parsed != 0;
     } else {
       std::cerr << "Unknown option: " << argv[i] << std::endl;
       return false;
@@ -303,8 +309,8 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
       !energyReaders.empty() &&
       ReadTotalEnergy(energyReaders, &energyStart, &energyError);
   if (!canReadEnergy && !energyReaders.empty()) {
-    std::cerr << "Warning: failed to read starting energy: " << energyError
-              << std::endl;
+    std::cerr << "Failed to read starting energy: " << energyError << std::endl;
+    if (!options.allowMissingEnergy) return false;
   }
 
   for (size_t i = 0; i < options.gpus.size(); ++i) {
@@ -351,8 +357,8 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
     metrics->energyPerGB =
         logicalGB > 0.0 ? metrics->energyMj / logicalGB : 0.0;
   } else if (canReadEnergy) {
-    std::cerr << "Warning: failed to read ending energy: " << energyError
-              << std::endl;
+    std::cerr << "Failed to read ending energy: " << energyError << std::endl;
+    if (!options.allowMissingEnergy) return false;
   }
   return true;
 }
@@ -412,7 +418,9 @@ int main(int argc, char** argv) {
             << " gpus=" << JoinInts(options.gpus)
             << " iters=" << options.iters
             << " warmup=" << options.warmup
-            << " repeats=" << options.repeats << "\n";
+            << " repeats=" << options.repeats
+            << " allow_missing_energy="
+            << (options.allowMissingEnergy ? 1 : 0) << "\n";
 
   size_t maxBytes = 0;
   for (size_t bytes : options.sizes) {
@@ -473,8 +481,16 @@ int main(int argc, char** argv) {
     }
   }
   if (static_cast<int>(energyReaders.size()) != nranks) {
-    std::cout << "warning energy fields will be NA because at least one GPU "
-                 "does not expose NVML total energy.\n";
+    if (!options.allowMissingEnergy) {
+      std::cerr << "Fatal: NVML total energy counter is required on every "
+                   "participating GPU for this benchmark. Use "
+                   "--allow-missing-energy=1 only when you intentionally want "
+                   "runtime-only output.\n";
+      return 1;
+    }
+    std::cout << "warning energy fields will be NA because "
+                 "--allow-missing-energy=1 was set and at least one GPU does "
+                 "not expose NVML total energy.\n";
     energyReaders.clear();
   }
 

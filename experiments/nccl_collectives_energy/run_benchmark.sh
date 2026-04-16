@@ -40,7 +40,7 @@ build_bench() {
   local nccl_home="$2"
   local bench_build="$3"
   echo "==> Building collective energy benchmark for '${label}'"
-  make -C "${REPO_ROOT}/experiments/nccl_allreduce_energy" \
+  make -C "${REPO_ROOT}/experiments/nccl_collectives_energy" \
     NCCL_HOME="${nccl_home}" \
     BUILDDIR="${bench_build}"
 }
@@ -49,7 +49,7 @@ run_variant() {
   local label="$1"
   local nccl_home="$2"
   local bench_bin="$3"
-  local csv_file="${OUT_ROOT}/phase4_results.csv"
+  local csv_file="${OUT_ROOT}/benchmark_results.csv"
   for collective in ${COLLECTIVES}; do
     local log_file="${OUT_ROOT}/${collective}_${label}.log"
     echo "==> Running '${label}' collective='${collective}'"
@@ -67,7 +67,7 @@ run_variant() {
   done
 }
 
-echo "Phase 4 fixed-backoff experiment"
+echo "NCCL collective energy benchmark"
 echo "repo=${REPO_ROOT}"
 echo "out=${OUT_ROOT}"
 echo "gpus=${GPUS}"
@@ -81,7 +81,7 @@ echo "NCCL_PROTO=${NCCL_PROTO}"
 
 baseline_build="${OUT_ROOT}/build_baseline"
 baseline_bench_build="${OUT_ROOT}/bench_baseline"
-baseline_bench="${baseline_bench_build}/allreduce_energy_bench"
+baseline_bench="${baseline_bench_build}/collectives_energy_bench"
 build_nccl baseline 0 "${baseline_build}"
 build_bench baseline "${baseline_build}" "${baseline_bench_build}"
 run_variant baseline "${baseline_build}" "${baseline_bench}"
@@ -90,7 +90,7 @@ for sleep_ns in ${SLEEP_NS_LIST}; do
   label="sleep_${sleep_ns}ns_every${SLEEP_EVERY}"
   nccl_build="${OUT_ROOT}/build_${label}"
   bench_build="${OUT_ROOT}/bench_${label}"
-  bench_bin="${bench_build}/allreduce_energy_bench"
+  bench_bin="${bench_build}/collectives_energy_bench"
   build_nccl "${label}" "${sleep_ns}" "${nccl_build}"
   build_bench "${label}" "${nccl_build}" "${bench_build}"
   run_variant "${label}" "${nccl_build}" "${bench_bin}"
@@ -98,4 +98,4 @@ done
 
 echo "==> Done"
 echo "Logs and CSV are in ${OUT_ROOT}"
-echo "CSV: ${OUT_ROOT}/phase4_results.csv"
+echo "CSV: ${OUT_ROOT}/benchmark_results.csv"

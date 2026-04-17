@@ -95,20 +95,36 @@ The script writes outputs under:
 experiments/nccl_collectives_energy/outputs/<timestamp>/
 ```
 
-When launched through `run_benchmark_h100.sbatch`, the default output directory uses the Slurm job id:
+GPU-specific Slurm launchers are provided for repeated queued runs:
 
-```text
-experiments/nccl_collectives_energy/outputs/<SLURM_JOB_ID>/
+```bash
+sbatch experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
+sbatch experiments/nccl_collectives_energy/run_benchmark_a100.sbatch
+sbatch experiments/nccl_collectives_energy/run_benchmark_l40s.sbatch
 ```
 
-Expected files include:
+Each launcher sets the matching CUDA architecture and result prefix:
 
 ```text
-allreduce_baseline.log
-allgather_baseline.log
-allreduce_sleep_64ns_every8.log
-allgather_sleep_64ns_every8.log
-benchmark_results.csv
+H100: sm_90, result prefix h100
+A100: sm_80, result prefix a100
+L40S: sm_89, result prefix l40s
+```
+
+When launched through these sbatch files, the default output directory includes both GPU type and Slurm job id:
+
+```text
+experiments/nccl_collectives_energy/outputs/<gpu_type>_<SLURM_JOB_ID>/
+```
+
+Expected files include the GPU type in their names:
+
+```text
+h100_allreduce_baseline.log
+h100_allgather_baseline.log
+h100_allreduce_sleep_64ns_every8.log
+h100_allgather_sleep_64ns_every8.log
+h100_results.csv
 ```
 
 The script exports `NCCL_PROTO=Simple` by default so the measured collective path matches the Simple-protocol wait backoff hook.

@@ -1,17 +1,13 @@
 #!/bin/bash
 # Submit from the repository root:
-#   sbatch experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
-#
-# 8 hours is conservative for building NCCL variants plus running the benchmark.
-# For a short queue-friendly smoke test, override with:
-#   sbatch -t 2:00:00 experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
+#   sbatch experiments/nccl_collectives_energy/run_benchmark_l40s.sbatch
 
-#SBATCH -J nccl-h100-energy
+#SBATCH -J nccl-l40s-energy
 #SBATCH -A gts-dmahajan7
 #SBATCH -q inferno
 #SBATCH -N 1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:H100:4
+#SBATCH --gres=gpu:L40S:4
 #SBATCH --mem-per-gpu=32G
 #SBATCH -t 8:00:00
 #SBATCH -o slurm-%x-%j.out
@@ -31,9 +27,9 @@ conda activate ccoverlap
 nvidia-smi
 
 export JOBS="${JOBS:-${SLURM_CPUS_ON_NODE:-8}}"
-export RESULT_PREFIX="${RESULT_PREFIX:-h100}"
+export RESULT_PREFIX="${RESULT_PREFIX:-l40s}"
 export OUT_ROOT="${OUT_ROOT:-${SLURM_SUBMIT_DIR}/experiments/nccl_collectives_energy/outputs/${RESULT_PREFIX}_${SLURM_JOB_ID}}"
-export NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_90,code=sm_90}"
+export NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_89,code=sm_89}"
 export GPUS="${GPUS:-0,1,2,3}"
 export SIZES="${SIZES:-64M,128M}"
 export ITERS="${ITERS:-200}"

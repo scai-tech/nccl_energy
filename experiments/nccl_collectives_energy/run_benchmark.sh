@@ -15,6 +15,7 @@ COLLECTIVES="${COLLECTIVES:-allreduce allgather}"
 OUT_ROOT="${OUT_ROOT:-${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)}"
 NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_90,code=compute_90}"
 JOBS="${JOBS:-${SLURM_CPUS_ON_NODE:-8}}"
+RESULT_PREFIX="${RESULT_PREFIX:-benchmark}"
 
 mkdir -p "${OUT_ROOT}"
 
@@ -50,9 +51,9 @@ run_variant() {
   local label="$1"
   local nccl_home="$2"
   local bench_bin="$3"
-  local csv_file="${OUT_ROOT}/benchmark_results.csv"
+  local csv_file="${OUT_ROOT}/${RESULT_PREFIX}_results.csv"
   for collective in ${COLLECTIVES}; do
-    local log_file="${OUT_ROOT}/${collective}_${label}.log"
+    local log_file="${OUT_ROOT}/${RESULT_PREFIX}_${collective}_${label}.log"
     echo "==> Running '${label}' collective='${collective}'"
     LD_LIBRARY_PATH="${nccl_home}/lib:${LD_LIBRARY_PATH:-}" \
       "${bench_bin}" \
@@ -78,6 +79,7 @@ echo "sleep_ns_list=${SLEEP_NS_LIST} sleep_every=${SLEEP_EVERY}"
 echo "collectives=${COLLECTIVES}"
 echo "nvcc_gencode=${NVCC_GENCODE}"
 echo "jobs=${JOBS}"
+echo "result_prefix=${RESULT_PREFIX}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 echo "NCCL_PROTO=${NCCL_PROTO}"
 
@@ -100,4 +102,4 @@ done
 
 echo "==> Done"
 echo "Logs and CSV are in ${OUT_ROOT}"
-echo "CSV: ${OUT_ROOT}/benchmark_results.csv"
+echo "CSV: ${OUT_ROOT}/${RESULT_PREFIX}_results.csv"

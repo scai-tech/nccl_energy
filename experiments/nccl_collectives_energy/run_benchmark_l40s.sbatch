@@ -4,7 +4,7 @@
 
 #SBATCH -J nccl-l40s-energy
 #SBATCH -A gts-dmahajan7
-#SBATCH -q inferno
+#SBATCH -q embers
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:L40S:4

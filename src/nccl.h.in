@@ -136,6 +136,34 @@ typedef struct ncclSimInfo_v22200 {
     float estimatedTime;
 } ncclSimInfo_t;
 
+/* Experimental Simple protocol polling counters. Meaningful only when NCCL is
+ * built with NCCL_EXPERIMENT_POLL_STATS=1. */
+#define NCCL_EXPERIMENT_POLL_STATS_OP_SEND 0
+#define NCCL_EXPERIMENT_POLL_STATS_OP_RECV 1
+#define NCCL_EXPERIMENT_POLL_STATS_OP_RECV_SEND 2
+#define NCCL_EXPERIMENT_POLL_STATS_OP_OTHER 3
+#define NCCL_EXPERIMENT_POLL_STATS_OPS 4
+
+#define NCCL_EXPERIMENT_POLL_STATS_WAIT_RECV 0
+#define NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND 1
+#define NCCL_EXPERIMENT_POLL_STATS_WAITS 2
+
+typedef struct ncclExperimentPollStatsSlot {
+  unsigned long long loop_entries;
+  unsigned long long loop_iters;
+  unsigned long long load_step_calls;
+  unsigned long long wait_cycles;
+} ncclExperimentPollStatsSlot_t;
+
+typedef struct ncclExperimentPollStats {
+  ncclExperimentPollStatsSlot_t slot[NCCL_EXPERIMENT_POLL_STATS_OPS][NCCL_EXPERIMENT_POLL_STATS_WAITS];
+} ncclExperimentPollStats_t;
+
+ncclResult_t  ncclExperimentPollStatsReset(void);
+ncclResult_t pncclExperimentPollStatsReset(void);
+ncclResult_t  ncclExperimentPollStatsRead(ncclExperimentPollStats_t* stats);
+ncclResult_t pncclExperimentPollStatsRead(ncclExperimentPollStats_t* stats);
+
 /* NCCL_SIM_INFO_INITIALIZER must be assigned to initialize simInfo structure when it is created.
  * Not initialized simInfo will result in NCCL error. */
 #define NCCL_SIM_INFO_INITIALIZER {                                         \

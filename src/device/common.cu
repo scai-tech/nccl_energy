@@ -10,11 +10,35 @@
 #include "common.h"
 #include "nccl_device.h"
 #include "comm.h"
+#include <string.h>
 
 __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ < 700
   __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
 #endif
+
+#if NCCL_EXPERIMENT_POLL_STATS
+__device__ ncclExperimentPollStats_t ncclExperimentPollStatsDevice;
+#endif
+
+NCCL_API(ncclResult_t, ncclExperimentPollStatsReset);
+ncclResult_t ncclExperimentPollStatsReset() {
+#if NCCL_EXPERIMENT_POLL_STATS
+  CUDACHECK(cudaMemsetToSymbol(ncclExperimentPollStatsDevice, 0, sizeof(ncclExperimentPollStatsDevice)));
+#endif
+  return ncclSuccess;
+}
+
+NCCL_API(ncclResult_t, ncclExperimentPollStatsRead, ncclExperimentPollStats_t* stats);
+ncclResult_t ncclExperimentPollStatsRead(ncclExperimentPollStats_t* stats) {
+  if (stats == NULL) return ncclInvalidArgument;
+#if NCCL_EXPERIMENT_POLL_STATS
+  CUDACHECK(cudaMemcpyFromSymbol(stats, ncclExperimentPollStatsDevice, sizeof(*stats)));
+#else
+  memset(stats, 0, sizeof(*stats));
+#endif
+  return ncclSuccess;
+}
 
 struct RunWorkNop {
   __device__ void run() {}

@@ -16,6 +16,14 @@
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY 8
 #endif
 
+#ifndef NCCL_EXPERIMENT_POLL_STATS
+#define NCCL_EXPERIMENT_POLL_STATS 0
+#endif
+
+#ifndef NCCL_EXPERIMENT_POLL_STATS_TIMING
+#define NCCL_EXPERIMENT_POLL_STATS_TIMING 1
+#endif
+
 __device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
 #if NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS > 0
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
@@ -26,6 +34,39 @@ __device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
 #endif
 #endif
 }
+
+#if NCCL_EXPERIMENT_POLL_STATS
+extern __device__ ncclExperimentPollStats_t ncclExperimentPollStatsDevice;
+
+__device__ __forceinline__ int ncclExperimentPollStatsOp(int recv, int send) {
+  if (recv && send) return NCCL_EXPERIMENT_POLL_STATS_OP_RECV_SEND;
+  if (send) return NCCL_EXPERIMENT_POLL_STATS_OP_SEND;
+  if (recv) return NCCL_EXPERIMENT_POLL_STATS_OP_RECV;
+  return NCCL_EXPERIMENT_POLL_STATS_OP_OTHER;
+}
+
+__device__ __forceinline__ unsigned long long ncclExperimentPollStatsClock() {
+#if NCCL_EXPERIMENT_POLL_STATS_TIMING
+  return clock64();
+#else
+  return 0;
+#endif
+}
+
+__device__ __forceinline__ void ncclExperimentPollStatsRecord(
+    int op, int wait, unsigned long long loopIters, unsigned long long loadStepCalls,
+    unsigned long long startClock) {
+  if (loopIters == 0) return;
+  // Count loadStepValue() calls made by polling loops; setup cache loads are excluded.
+  ncclExperimentPollStatsSlot_t* slot = &ncclExperimentPollStatsDevice.slot[op][wait];
+  atomicAdd(&slot->loop_entries, 1ULL);
+  atomicAdd(&slot->loop_iters, loopIters);
+  atomicAdd(&slot->load_step_calls, loadStepCalls);
+#if NCCL_EXPERIMENT_POLL_STATS_TIMING
+  atomicAdd(&slot->wait_cycles, clock64() - startClock);
+#endif
+}
+#endif
 
 enum primsMode {
   primsModeDefault = 0,
@@ -132,12 +173,25 @@ class Primitives<
     // coverity[dead_error_line]
     if ((flags & (Recv * RoleWaitRecv)) || (flags & (Send * RoleWaitSend))) {
       int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+      unsigned long long pollStatsIters = 0;
+      unsigned long long pollStatsStart = 0;
+      const int pollStatsWait = isSendNotRecv ? NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND : NCCL_EXPERIMENT_POLL_STATS_WAIT_RECV;
+      if (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice)
+        pollStatsStart = ncclExperimentPollStatsClock();
+#endif
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+        pollStatsIters++;
+#endif
         ncclExperimentSimpleWaitBackoff(spins);
         if (checkAbort(flags, Aborted, spins)) break;
         //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
       }
+#if NCCL_EXPERIMENT_POLL_STATS
+      ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(Recv, Send), pollStatsWait, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
     }
 
     if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
@@ -365,10 +419,23 @@ public:
         if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {
           const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
           int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+          unsigned long long pollStatsIters = 0;
+          unsigned long long pollStatsStart = 0;
+          const int pollStatsWait = isSendNotRecv ? NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND : NCCL_EXPERIMENT_POLL_STATS_WAIT_RECV;
+          if (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice)
+            pollStatsStart = ncclExperimentPollStatsClock();
+#endif
           while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
             connStepCache = loadStepValue(connStepPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+            pollStatsIters++;
+#endif
             if (checkAbort(flags, Aborted, spins)) break;
           }
+#if NCCL_EXPERIMENT_POLL_STATS
+          ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(Recv, Send), pollStatsWait, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
           void **ptrs = isSendNotRecv ? ncclShmem.groups[group].dsts
                                       : ncclShmem.groups[group].srcs;
           if ((flags & ConnFifoEnabled) && connFifo[step%NCCL_STEPS].mode == NCCL_MODE_OFFSET) {
@@ -981,17 +1048,41 @@ private:
     if (recv && (flags & RoleWaitRecv)) {
       ncclShmem.groups[group].srcs[0] = ((T*)peer->buff) + (step%NCCL_STEPS)*peer->connStepSize + ps->recvOffset;
       int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+      unsigned long long pollStatsIters = 0;
+      unsigned long long pollStatsStart = 0;
+      if (peer->stepCache < step + StepPerSlice)
+        pollStatsStart = ncclExperimentPollStatsClock();
+#endif
       while (peer->stepCache < step + StepPerSlice) {
         peer->stepCache = loadStepValue(peer->tailPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+        pollStatsIters++;
+#endif
         if (checkAbort(flags, Aborted, spins)) break;
       }
+#if NCCL_EXPERIMENT_POLL_STATS
+      ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(recv, send), NCCL_EXPERIMENT_POLL_STATS_WAIT_RECV, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
     }
     if (send && (flags & RoleWaitSend)) {
       int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+      unsigned long long pollStatsIters = 0;
+      unsigned long long pollStatsStart = 0;
+      if (peer->stepCache + NCCL_STEPS < step + ps->stepOffset + StepPerSlice)
+        pollStatsStart = ncclExperimentPollStatsClock();
+#endif
       while (peer->stepCache + NCCL_STEPS < step + ps->stepOffset + StepPerSlice) {
         peer->stepCache = loadStepValue(peer->headPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+        pollStatsIters++;
+#endif
         if (checkAbort(flags, Aborted, spins)) break;
       }
+#if NCCL_EXPERIMENT_POLL_STATS
+      ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(recv, send), NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
       ncclShmem.groups[group].dsts[0] = ((T*)peer->buff) + ((step+ps->stepOffset)%NCCL_STEPS)*peer->connStepSize + ps->sendOffset;
       if (peer->accSize < ps->sendOffset + nelem + (step+ps->stepOffset)*peer->connStepSize) {
         // New data, add our own data to it.
@@ -1075,10 +1166,22 @@ private:
     if (recv && (flags & RoleWaitRecv)) {
       ncclShmem.groups[group].srcs[0] = ((T*)peer->buff) + ((step+ps->stepOffset)%NCCL_STEPS)*peer->connStepSize + ps->recvOffset;
       int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+      unsigned long long pollStatsIters = 0;
+      unsigned long long pollStatsStart = 0;
+      if (peer->stepCache < step + ps->stepOffset + StepPerSlice)
+        pollStatsStart = ncclExperimentPollStatsClock();
+#endif
       while (peer->stepCache < step + ps->stepOffset + StepPerSlice) {
         peer->stepCache = loadStepValue(peer->tailPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+        pollStatsIters++;
+#endif
         if (checkAbort(flags, Aborted, spins)) break;
       }
+#if NCCL_EXPERIMENT_POLL_STATS
+      ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(recv, send), NCCL_EXPERIMENT_POLL_STATS_WAIT_RECV, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
       if (peer->accSize < ps->recvOffset + nelem + (step+ps->stepOffset)*peer->connStepSize) {
         // New data, copy to our output buffer.
         ncclShmem.groups[group].dsts[1] = userOutput + ps->outIx;
@@ -1088,10 +1191,22 @@ private:
     }
     if (send && (flags & RoleWaitSend)) {
       int spins = 0;
+#if NCCL_EXPERIMENT_POLL_STATS
+      unsigned long long pollStatsIters = 0;
+      unsigned long long pollStatsStart = 0;
+      if (peer->stepCache + NCCL_STEPS < step + StepPerSlice)
+        pollStatsStart = ncclExperimentPollStatsClock();
+#endif
       while (peer->stepCache + NCCL_STEPS < step + StepPerSlice) {
         peer->stepCache = loadStepValue(peer->headPtr);
+#if NCCL_EXPERIMENT_POLL_STATS
+        pollStatsIters++;
+#endif
         if (checkAbort(flags, Aborted, spins)) break;
       }
+#if NCCL_EXPERIMENT_POLL_STATS
+      ncclExperimentPollStatsRecord(ncclExperimentPollStatsOp(recv, send), NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND, pollStatsIters, pollStatsIters, pollStatsStart);
+#endif
       ncclShmem.groups[group].dsts[0] = ((T*)peer->buff) + (step%NCCL_STEPS)*peer->connStepSize + ps->sendOffset;
     }
     long long int localAccSize = shmem->localAccSize;

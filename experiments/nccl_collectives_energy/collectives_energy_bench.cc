@@ -29,6 +29,7 @@ struct Options {
   std::string modeLabel = "baseline";
   std::string collective = "allreduce";
   bool allowMissingEnergy = false;
+  bool pollStats = false;
 };
 
 struct RunMetrics {
@@ -38,6 +39,7 @@ struct RunMetrics {
   double avgPowerW = 0.0;
   double algBwGBps = 0.0;
   double energyPerGB = 0.0;
+  ncclExperimentPollStats_t pollStats = {};
 };
 
 struct Summary {
@@ -132,12 +134,14 @@ void PrintHelp(const char* program) {
       << "  --gpus=0,1,2,3        CUDA device list for one-process NCCL run\n"
       << "  --bytes=16K,4M,64M    Message sizes per rank (default: 16K,256K,4M,64M)\n"
       << "  --collective=NAME     allreduce or allgather (default: allreduce)\n"
+      << "                        sendrecv also runs grouped ncclSend/ncclRecv ring P2P\n"
       << "  --iters=N             Collective calls per measured repeat (default: 100)\n"
       << "  --warmup=N            Warmup collective calls per size (default: 20)\n"
       << "  --repeats=N           Measured repeats per size (default: 5)\n"
       << "  --csv=PATH            Append CSV results to PATH\n"
       << "  --mode-label=NAME     Label stored in logs and CSV (default: baseline)\n"
       << "  --allow-missing-energy=0|1 Continue with energy=NA if NVML energy is unavailable (default: 0)\n"
+      << "  --poll-stats=0|1      Print experimental Simple polling counters (default: 0)\n"
       << "  --help                Print this message\n";
 }
 
@@ -162,7 +166,8 @@ bool ParseArgs(int argc, char** argv, Options* options) {
     } else if (GetArgValue(argc, argv, &i, "--collective", &value)) {
       options->collective = value;
       if (options->collective != "allreduce" &&
-          options->collective != "allgather") {
+          options->collective != "allgather" &&
+          options->collective != "sendrecv") {
         std::cerr << "Invalid --collective value: " << value << std::endl;
         return false;
       }
@@ -180,6 +185,10 @@ bool ParseArgs(int argc, char** argv, Options* options) {
       int parsed = 0;
       if (!ParseInt(value, &parsed) || (parsed != 0 && parsed != 1)) return false;
       options->allowMissingEnergy = parsed != 0;
+    } else if (GetArgValue(argc, argv, &i, "--poll-stats", &value)) {
+      int parsed = 0;
+      if (!ParseInt(value, &parsed) || (parsed != 0 && parsed != 1)) return false;
+      options->pollStats = parsed != 0;
     } else {
       std::cerr << "Unknown option: " << argv[i] << std::endl;
       return false;
@@ -208,6 +217,88 @@ bool ParseArgs(int argc, char** argv, Options* options) {
     return false;
   }
   return true;
+}
+
+void AddPollStats(ncclExperimentPollStats_t* total,
+                  const ncclExperimentPollStats_t& next) {
+  for (int op = 0; op < NCCL_EXPERIMENT_POLL_STATS_OPS; ++op) {
+    for (int wait = 0; wait < NCCL_EXPERIMENT_POLL_STATS_WAITS; ++wait) {
+      total->slot[op][wait].loop_entries += next.slot[op][wait].loop_entries;
+      total->slot[op][wait].loop_iters += next.slot[op][wait].loop_iters;
+      total->slot[op][wait].load_step_calls += next.slot[op][wait].load_step_calls;
+      total->slot[op][wait].wait_cycles += next.slot[op][wait].wait_cycles;
+    }
+  }
+}
+
+bool ResetPollStats(const std::vector<int>& gpus) {
+  for (int gpu : gpus) {
+    CUDA_CHECK(cudaSetDevice(gpu));
+    NCCL_CHECK(ncclExperimentPollStatsReset());
+  }
+  return true;
+}
+
+bool ReadPollStats(const std::vector<int>& gpus,
+                   ncclExperimentPollStats_t* total) {
+  std::memset(total, 0, sizeof(*total));
+  for (int gpu : gpus) {
+    CUDA_CHECK(cudaSetDevice(gpu));
+    ncclExperimentPollStats_t local = {};
+    NCCL_CHECK(ncclExperimentPollStatsRead(&local));
+    AddPollStats(total, local);
+  }
+  return true;
+}
+
+const char* PollStatsOpName(int op) {
+  switch (op) {
+    case NCCL_EXPERIMENT_POLL_STATS_OP_SEND: return "send";
+    case NCCL_EXPERIMENT_POLL_STATS_OP_RECV: return "recv";
+    case NCCL_EXPERIMENT_POLL_STATS_OP_RECV_SEND: return "recvSend";
+    default: return "other";
+  }
+}
+
+const char* PollStatsWaitName(int wait) {
+  return wait == NCCL_EXPERIMENT_POLL_STATS_WAIT_SEND ? "wait_send"
+                                                       : "wait_recv";
+}
+
+double SafeRatio(unsigned long long numerator, unsigned long long denominator) {
+  return denominator == 0 ? 0.0 : static_cast<double>(numerator) /
+                                static_cast<double>(denominator);
+}
+
+void PrintPollStats(const ncclExperimentPollStats_t& stats,
+                    const std::string& collective, size_t bytes, int repeat) {
+  std::cout << "poll_stats_begin collective=" << collective
+            << " bytes=" << bytes << " repeat=" << repeat << "\n";
+  for (int op = 0; op < NCCL_EXPERIMENT_POLL_STATS_OPS; ++op) {
+    unsigned long long opIters = 0;
+    for (int wait = 0; wait < NCCL_EXPERIMENT_POLL_STATS_WAITS; ++wait) {
+      opIters += stats.slot[op][wait].loop_iters;
+    }
+    std::cout << "Operation=" << PollStatsOpName(op) << "\n";
+    for (int wait = 0; wait < NCCL_EXPERIMENT_POLL_STATS_WAITS; ++wait) {
+      const ncclExperimentPollStatsSlot_t& slot = stats.slot[op][wait];
+      std::cout << "  " << PollStatsWaitName(wait) << ":\n"
+                << "    loop_entries=" << slot.loop_entries << "\n"
+                << "    loop_iters=" << slot.loop_iters << "\n"
+                << "    loadStep_calls=" << slot.load_step_calls << "\n"
+                << "    avg_loads_per_wait="
+                << SafeRatio(slot.load_step_calls, slot.loop_entries) << "\n"
+                << "    loads_per_iter="
+                << SafeRatio(slot.load_step_calls, slot.loop_iters) << "\n"
+                << "    wait_share_by_iters="
+                << SafeRatio(slot.loop_iters, opIters) << "\n"
+                << "    wait_cycles=" << slot.wait_cycles << "\n"
+                << "    avg_cycles_per_wait="
+                << SafeRatio(slot.wait_cycles, slot.loop_entries) << "\n";
+    }
+  }
+  std::cout << "poll_stats_end collective=" << collective
+            << " bytes=" << bytes << " repeat=" << repeat << "\n";
 }
 
 Summary ComputeSummary(const std::vector<double>& values) {
@@ -281,9 +372,19 @@ bool RunCollectiveLoop(const Options& options,
       if (options.collective == "allreduce") {
         NCCL_CHECK(ncclAllReduce(sendbuff[i], recvbuff[i], count, ncclFloat,
                                  ncclSum, comms[i], streams[i]));
-      } else {
+      } else if (options.collective == "allgather") {
         NCCL_CHECK(ncclAllGather(sendbuff[i], recvbuff[i], count, ncclFloat,
                                  comms[i], streams[i]));
+      } else {
+        const int next = (static_cast<int>(i) + 1) %
+                         static_cast<int>(options.gpus.size());
+        const int prev = (static_cast<int>(i) +
+                          static_cast<int>(options.gpus.size()) - 1) %
+                         static_cast<int>(options.gpus.size());
+        NCCL_CHECK(ncclSend(sendbuff[i], count, ncclFloat, next, comms[i],
+                            streams[i]));
+        NCCL_CHECK(ncclRecv(recvbuff[i], count, ncclFloat, prev, comms[i],
+                            streams[i]));
       }
     }
     NCCL_CHECK(ncclGroupEnd());
@@ -301,6 +402,7 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
                    size_t bytes, RunMetrics* metrics) {
   const size_t count = bytes / sizeof(float);
   if (!SynchronizeAll(options.gpus, streams)) return false;
+  if (options.pollStats && !ResetPollStats(options.gpus)) return false;
 
   uint64_t energyStart = 0;
   uint64_t energyStop = 0;
@@ -330,6 +432,9 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
     CUDA_CHECK(cudaEventSynchronize(stops[i]));
   }
   if (!SynchronizeAll(options.gpus, streams)) return false;
+  if (options.pollStats && !ReadPollStats(options.gpus, &metrics->pollStats)) {
+    return false;
+  }
 
   float elapsedMaxMs = 0.0f;
   for (size_t i = 0; i < options.gpus.size(); ++i) {
@@ -420,7 +525,8 @@ int main(int argc, char** argv) {
             << " warmup=" << options.warmup
             << " repeats=" << options.repeats
             << " allow_missing_energy="
-            << (options.allowMissingEnergy ? 1 : 0) << "\n";
+            << (options.allowMissingEnergy ? 1 : 0)
+            << " poll_stats=" << (options.pollStats ? 1 : 0) << "\n";
 
   size_t maxBytes = 0;
   for (size_t bytes : options.sizes) {
@@ -545,6 +651,9 @@ int main(int argc, char** argv) {
         std::cout << " energy_mj=NA avg_power_w=NA energy_per_GB_mJ=NA";
       }
       std::cout << " alg_bw_GBps=" << metrics.algBwGBps << "\n";
+      if (options.pollStats) {
+        PrintPollStats(metrics.pollStats, options.collective, bytes, repeat);
+      }
       AppendCsvRow(options, bytes, repeat, metrics);
     }
 

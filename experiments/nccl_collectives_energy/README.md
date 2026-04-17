@@ -74,7 +74,7 @@ For AllGather, `--bytes` is the per-rank send size. The receive buffer is alloca
 Use `run_benchmark.sh` to build and run baseline plus fixed sleep-backoff NCCL variants:
 
 ```bash
-MAKEFLAGS="-j32" \
+JOBS=32 \
 NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90" \
 GPUS=0,1,2,3 \
 SIZES=64M,128M \
@@ -87,10 +87,18 @@ COLLECTIVES="allreduce allgather" \
 ./experiments/nccl_collectives_energy/run_benchmark.sh
 ```
 
+`run_benchmark.sh` sweeps all values in `SLEEP_NS_LIST`. With the example above it runs `baseline`, `sleep_64ns_every8`, and `sleep_256ns_every8`.
+
 The script writes outputs under:
 
 ```text
 experiments/nccl_collectives_energy/outputs/<timestamp>/
+```
+
+When launched through `run_benchmark_h100.sbatch`, the default output directory uses the Slurm job id:
+
+```text
+experiments/nccl_collectives_energy/outputs/<SLURM_JOB_ID>/
 ```
 
 Expected files include:
@@ -170,7 +178,7 @@ The hook is in `src/device/prims_simple.h`, inside the Simple primitive `waitPee
 ## CSV Columns
 
 ```text
-mode,nranks,gpus,bytes,iters,repeat,elapsed_ms,energy_mj,avg_power_w,alg_bw_GBps,energy_per_GB_mJ,collective
+mode,nranks,gpus,collective,bytes,iters,repeat,elapsed_ms,per_iter_elapsed_ms,energy_mj,per_iter_energy_mj,avg_power_w,alg_bw_GBps,energy_per_GB_mJ
 ```
 
 One CSV row is one measured repeat.
@@ -179,8 +187,14 @@ One CSV row is one measured repeat.
 elapsed_ms:
   runtime for iters collective calls
 
+per_iter_elapsed_ms:
+  elapsed_ms / iters
+
 energy_mj:
   total NVML energy delta across all participating GPUs for iters collective calls
+
+per_iter_energy_mj:
+  energy_mj / iters
 
 avg_power_w:
   energy_mj / elapsed_ms
@@ -190,13 +204,6 @@ alg_bw_GBps:
 
 energy_per_GB_mJ:
   energy_mj / logicalGB
-```
-
-For per-collective averages:
-
-```text
-per_iter_elapsed_ms = elapsed_ms / iters
-per_iter_energy_mj = energy_mj / iters
 ```
 
 ## Caveats

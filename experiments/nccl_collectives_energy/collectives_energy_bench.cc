@@ -368,24 +368,31 @@ void AppendCsvHeaderIfNeeded(const std::string& path) {
   std::ifstream in(path.c_str());
   if (in.good() && in.peek() != std::ifstream::traits_type::eof()) return;
   std::ofstream out(path.c_str(), std::ios::app);
-  out << "mode,nranks,gpus,bytes,iters,repeat,elapsed_ms,energy_mj,"
-         "avg_power_w,alg_bw_GBps,energy_per_GB_mJ,collective\n";
+  out << "mode,nranks,gpus,collective,bytes,iters,repeat,elapsed_ms,"
+         "per_iter_elapsed_ms,energy_mj,per_iter_energy_mj,avg_power_w,"
+         "alg_bw_GBps,energy_per_GB_mJ\n";
 }
 
 void AppendCsvRow(const Options& options, size_t bytes, int repeat,
                   const RunMetrics& metrics) {
   if (options.csvPath.empty()) return;
   std::ofstream out(options.csvPath.c_str(), std::ios::app);
+  const double perIterElapsed =
+      options.iters > 0 ? metrics.elapsedMs / static_cast<double>(options.iters)
+                        : 0.0;
   out << options.modeLabel << "," << options.gpus.size() << ",\""
-      << JoinInts(options.gpus) << "\"," << bytes << "," << options.iters
-      << "," << repeat << "," << metrics.elapsedMs << ",";
+      << JoinInts(options.gpus) << "\"," << options.collective << "," << bytes
+      << "," << options.iters << "," << repeat << "," << metrics.elapsedMs
+      << "," << perIterElapsed << ",";
   if (metrics.hasEnergy) {
-    out << metrics.energyMj << "," << metrics.avgPowerW << ","
-        << metrics.algBwGBps << "," << metrics.energyPerGB << ","
-        << options.collective << "\n";
+    const double perIterEnergy =
+        options.iters > 0 ? metrics.energyMj / static_cast<double>(options.iters)
+                          : 0.0;
+    out << metrics.energyMj << "," << perIterEnergy << ","
+        << metrics.avgPowerW << "," << metrics.algBwGBps << ","
+        << metrics.energyPerGB << "\n";
   } else {
-    out << "NA,NA," << metrics.algBwGBps << ",NA,"
-        << options.collective << "\n";
+    out << "NA,NA,NA," << metrics.algBwGBps << ",NA\n";
   }
 }
 

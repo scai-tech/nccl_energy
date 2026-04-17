@@ -14,6 +14,7 @@ SLEEP_EVERY="${SLEEP_EVERY:-8}"
 COLLECTIVES="${COLLECTIVES:-allreduce allgather}"
 OUT_ROOT="${OUT_ROOT:-${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)}"
 NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_90,code=compute_90}"
+JOBS="${JOBS:-${SLURM_CPUS_ON_NODE:-8}}"
 
 mkdir -p "${OUT_ROOT}"
 
@@ -23,11 +24,11 @@ build_nccl() {
   local build_dir="$3"
   echo "==> Building NCCL variant '${label}' in ${build_dir}"
   if [[ "${sleep_ns}" == "0" ]]; then
-    make -C "${REPO_ROOT}" src.build \
+    make -C "${REPO_ROOT}" -j "${JOBS}" src.build \
       BUILDDIR="${build_dir}" \
       NVCC_GENCODE="${NVCC_GENCODE}"
   else
-    make -C "${REPO_ROOT}" src.build \
+    make -C "${REPO_ROOT}" -j "${JOBS}" src.build \
       BUILDDIR="${build_dir}" \
       NVCC_GENCODE="${NVCC_GENCODE}" \
       NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS="${sleep_ns}" \
@@ -40,7 +41,7 @@ build_bench() {
   local nccl_home="$2"
   local bench_build="$3"
   echo "==> Building collective energy benchmark for '${label}'"
-  make -C "${REPO_ROOT}/experiments/nccl_collectives_energy" \
+  make -C "${REPO_ROOT}/experiments/nccl_collectives_energy" -j "${JOBS}" \
     NCCL_HOME="${nccl_home}" \
     BUILDDIR="${bench_build}"
 }
@@ -76,6 +77,7 @@ echo "iters=${ITERS} warmup=${WARMUP} repeats=${REPEATS}"
 echo "sleep_ns_list=${SLEEP_NS_LIST} sleep_every=${SLEEP_EVERY}"
 echo "collectives=${COLLECTIVES}"
 echo "nvcc_gencode=${NVCC_GENCODE}"
+echo "jobs=${JOBS}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 echo "NCCL_PROTO=${NCCL_PROTO}"
 

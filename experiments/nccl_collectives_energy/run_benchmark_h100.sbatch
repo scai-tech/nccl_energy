@@ -30,7 +30,8 @@ conda activate ccoverlap
 
 nvidia-smi
 
-export MAKEFLAGS="${MAKEFLAGS:--j8}"
+export JOBS="${JOBS:-${SLURM_CPUS_ON_NODE:-8}}"
+export OUT_ROOT="${OUT_ROOT:-${SLURM_SUBMIT_DIR}/experiments/nccl_collectives_energy/outputs/${SLURM_JOB_ID}}"
 export NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_90,code=sm_90}"
 export GPUS="${GPUS:-0,1,2,3}"
 export SIZES="${SIZES:-64M,128M}"
@@ -42,7 +43,8 @@ export SLEEP_EVERY="${SLEEP_EVERY:-8}"
 export COLLECTIVES="${COLLECTIVES:-allreduce allgather}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 
-echo "makeflags=${MAKEFLAGS}"
+echo "jobs=${JOBS}"
+echo "out_root=${OUT_ROOT}"
 echo "nvcc_gencode=${NVCC_GENCODE}"
 echo "gpus=${GPUS}"
 echo "sizes=${SIZES}"

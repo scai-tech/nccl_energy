@@ -8,7 +8,7 @@
 
 #SBATCH -J nccl-energy
 #SBATCH -A gts-dmahajan7
-#SBATCH -q embers
+#SBATCH -q inferno
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:H100:4

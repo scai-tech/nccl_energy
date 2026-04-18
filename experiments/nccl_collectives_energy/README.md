@@ -83,11 +83,12 @@ WARMUP=20 \
 REPEATS=5 \
 SLEEP_NS_LIST="64 256" \
 SLEEP_EVERY_LIST="4 8 16" \
+BACKOFF_OP_LIST="all" \
 COLLECTIVES="allreduce allgather" \
 ./experiments/nccl_collectives_energy/run_benchmark.sh
 ```
 
-`run_benchmark.sh` sweeps all combinations of `SLEEP_NS_LIST` and `SLEEP_EVERY_LIST`. With the example above it runs `baseline`, `sleep_64ns_every4`, `sleep_64ns_every8`, `sleep_64ns_every16`, `sleep_256ns_every4`, `sleep_256ns_every8`, and `sleep_256ns_every16`.
+`run_benchmark.sh` sweeps all combinations of `SLEEP_NS_LIST`, `SLEEP_EVERY_LIST`, and `BACKOFF_OP_LIST`. With the example above it runs `baseline`, `sleep_64ns_every4`, `sleep_64ns_every8`, `sleep_64ns_every16`, `sleep_256ns_every4`, `sleep_256ns_every8`, and `sleep_256ns_every16`.
 
 For a longer H100 validation run, the H100 sbatch defaults use:
 
@@ -98,6 +99,20 @@ WARMUP=50
 REPEATS=10
 SLEEP_NS_LIST="32 64 128 256"
 SLEEP_EVERY_LIST="4 8 16"
+BACKOFF_OP_LIST="all"
+```
+
+After a good fixed sleep setting is identified, run a role-targeted sweep by narrowing sleep parameters and expanding `BACKOFF_OP_LIST`:
+
+```bash
+SIZES="64M,128M,256M" \
+ITERS=1000 \
+WARMUP=50 \
+REPEATS=10 \
+SLEEP_NS_LIST="64" \
+SLEEP_EVERY_LIST="8" \
+BACKOFF_OP_LIST="all recv send recvsend" \
+sbatch experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
 ```
 
 The script writes outputs under:
@@ -147,6 +162,7 @@ The fixed backoff hook is compile-time guarded. Baseline builds are unchanged be
 ```bash
 NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS=<ns>
 NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY=<polls>
+NCCL_EXPERIMENT_WAIT_BACKOFF_OP=<0|1|2|3>
 ```
 
 For example, the automated script builds `sleep_64ns_every8` with:
@@ -154,6 +170,16 @@ For example, the automated script builds `sleep_64ns_every8` with:
 ```bash
 NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS=64
 NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY=8
+NCCL_EXPERIMENT_WAIT_BACKOFF_OP=0
+```
+
+`NCCL_EXPERIMENT_WAIT_BACKOFF_OP` selects which Simple `waitPeer()` template shape receives backoff. `BACKOFF_OP_LIST` accepts either the names below or the numeric values:
+
+```text
+0: all waitPeer polling paths
+1: recv-only waitPeer calls, where Recv=1 and Send=0
+2: send-only waitPeer calls, where Send=1 and Recv=0
+3: recvsend waitPeer calls, where Recv=1 and Send=1
 ```
 
 The hook is in `src/device/prims_simple.h`, inside the Simple primitive `waitPeer()` polling loop.

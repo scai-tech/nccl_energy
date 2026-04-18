@@ -16,6 +16,20 @@
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY 8
 #endif
 
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_ALL 0
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECV 1
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_SEND 2
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECVSEND 3
+
+#ifndef NCCL_EXPERIMENT_WAIT_BACKOFF_OP
+#define NCCL_EXPERIMENT_WAIT_BACKOFF_OP NCCL_EXPERIMENT_WAIT_BACKOFF_OP_ALL
+#endif
+
+#if NCCL_EXPERIMENT_WAIT_BACKOFF_OP < NCCL_EXPERIMENT_WAIT_BACKOFF_OP_ALL || \
+    NCCL_EXPERIMENT_WAIT_BACKOFF_OP > NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECVSEND
+#error "NCCL_EXPERIMENT_WAIT_BACKOFF_OP must be 0(all), 1(recv), 2(send), or 3(recvsend)"
+#endif
+
 __device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
 #if NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS > 0
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
@@ -25,6 +39,22 @@ __device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
   }
 #endif
 #endif
+}
+
+template <int Recv, int Send>
+__device__ __forceinline__ bool ncclExperimentSimpleWaitBackoffApplies() {
+#if NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS > 0
+#if NCCL_EXPERIMENT_WAIT_BACKOFF_OP == NCCL_EXPERIMENT_WAIT_BACKOFF_OP_ALL
+  return true;
+#elif NCCL_EXPERIMENT_WAIT_BACKOFF_OP == NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECV
+  return Recv && !Send;
+#elif NCCL_EXPERIMENT_WAIT_BACKOFF_OP == NCCL_EXPERIMENT_WAIT_BACKOFF_OP_SEND
+  return Send && !Recv;
+#elif NCCL_EXPERIMENT_WAIT_BACKOFF_OP == NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECVSEND
+  return Recv && Send;
+#endif
+#endif
+  return false;
 }
 
 enum primsMode {
@@ -134,7 +164,9 @@ class Primitives<
       int spins = 0;
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
-        ncclExperimentSimpleWaitBackoff(spins);
+        if (ncclExperimentSimpleWaitBackoffApplies<Recv, Send>()) {
+          ncclExperimentSimpleWaitBackoff(spins);
+        }
         if (checkAbort(flags, Aborted, spins)) break;
         //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
       }

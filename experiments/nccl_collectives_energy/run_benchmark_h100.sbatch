@@ -7,8 +7,8 @@
 #   sbatch -t 2:00:00 experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
 
 #SBATCH -J nccl-h100-energy
-#SBATCH -A gts-dmahajan7
-#SBATCH -q embers
+#SBATCH -A gts-dmahajan7-paid
+#SBATCH -q inferno
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:H100:4
@@ -37,12 +37,13 @@ export RESULT_PREFIX="${RESULT_PREFIX:-h100}"
 export OUT_ROOT="${OUT_ROOT:-${SLURM_SUBMIT_DIR}/experiments/nccl_collectives_energy/outputs/${RESULT_PREFIX}_${SLURM_JOB_ID}}"
 export NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_90,code=sm_90}"
 export GPUS="${GPUS:-0,1,2,3}"
-export SIZES="${SIZES:-64M,128M}"
-export ITERS="${ITERS:-200}"
-export WARMUP="${WARMUP:-20}"
-export REPEATS="${REPEATS:-5}"
-export SLEEP_NS_LIST="${SLEEP_NS_LIST:-64 256}"
+export SIZES="${SIZES:-64M,128M,256M}"
+export ITERS="${ITERS:-1000}"
+export WARMUP="${WARMUP:-50}"
+export REPEATS="${REPEATS:-10}"
+export SLEEP_NS_LIST="${SLEEP_NS_LIST:-32 64 128 256}"
 export SLEEP_EVERY="${SLEEP_EVERY:-8}"
+export SLEEP_EVERY_LIST="${SLEEP_EVERY_LIST:-4 8 16}"
 export COLLECTIVES="${COLLECTIVES:-allreduce allgather}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 
@@ -53,7 +54,7 @@ echo "nvcc_gencode=${NVCC_GENCODE}"
 echo "gpus=${GPUS}"
 echo "sizes=${SIZES}"
 echo "iters=${ITERS} warmup=${WARMUP} repeats=${REPEATS}"
-echo "sleep_ns_list=${SLEEP_NS_LIST} sleep_every=${SLEEP_EVERY}"
+echo "sleep_ns_list=${SLEEP_NS_LIST} sleep_every_list=${SLEEP_EVERY_LIST}"
 echo "collectives=${COLLECTIVES}"
 echo "NCCL_PROTO=${NCCL_PROTO}"
 

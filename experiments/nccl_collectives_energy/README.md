@@ -82,12 +82,23 @@ ITERS=200 \
 WARMUP=20 \
 REPEATS=5 \
 SLEEP_NS_LIST="64 256" \
-SLEEP_EVERY=8 \
+SLEEP_EVERY_LIST="4 8 16" \
 COLLECTIVES="allreduce allgather" \
 ./experiments/nccl_collectives_energy/run_benchmark.sh
 ```
 
-`run_benchmark.sh` sweeps all values in `SLEEP_NS_LIST`. With the example above it runs `baseline`, `sleep_64ns_every8`, and `sleep_256ns_every8`.
+`run_benchmark.sh` sweeps all combinations of `SLEEP_NS_LIST` and `SLEEP_EVERY_LIST`. With the example above it runs `baseline`, `sleep_64ns_every4`, `sleep_64ns_every8`, `sleep_64ns_every16`, `sleep_256ns_every4`, `sleep_256ns_every8`, and `sleep_256ns_every16`.
+
+For a longer H100 validation run, the H100 sbatch defaults use:
+
+```bash
+SIZES=64M,128M,256M
+ITERS=1000
+WARMUP=50
+REPEATS=10
+SLEEP_NS_LIST="32 64 128 256"
+SLEEP_EVERY_LIST="4 8 16"
+```
 
 The script writes outputs under:
 

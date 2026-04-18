@@ -12,7 +12,7 @@
 #SBATCH -t 8:00:00
 #SBATCH -o slurm-%x-%j.out
 
-set -euo pipefail
+set -eo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
 
@@ -21,8 +21,10 @@ echo "node=$(hostname)"
 echo "submit_dir=${SLURM_SUBMIT_DIR}"
 echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
 
+set +u
 source "${HOME}/.bashrc"
 conda activate ccoverlap
+set -u
 
 nvidia-smi
 

@@ -71,7 +71,7 @@ For AllGather, `--bytes` is the per-rank send size. The receive buffer is alloca
 
 ## Automated Run
 
-Use `run_benchmark.sh` to build and run baseline plus fixed sleep-backoff NCCL variants:
+Use `run_benchmark.sh` to build and run baseline plus fixed or adaptive sleep-backoff NCCL variants:
 
 ```bash
 JOBS=32 \
@@ -84,22 +84,28 @@ REPEATS=5 \
 SLEEP_NS_LIST="64 256" \
 SLEEP_EVERY_LIST="4 8 16" \
 BACKOFF_OP_LIST="all" \
+BACKOFF_POLICY_LIST="fixed" \
 COLLECTIVES="allreduce allgather" \
 ./experiments/nccl_collectives_energy/run_benchmark.sh
 ```
 
-`run_benchmark.sh` sweeps all combinations of `SLEEP_NS_LIST`, `SLEEP_EVERY_LIST`, and `BACKOFF_OP_LIST`. With the example above it runs `baseline`, `sleep_64ns_every4`, `sleep_64ns_every8`, `sleep_64ns_every16`, `sleep_256ns_every4`, `sleep_256ns_every8`, and `sleep_256ns_every16`.
+`run_benchmark.sh` sweeps all combinations requested by `BACKOFF_POLICY_LIST`. For `fixed`, it sweeps `SLEEP_NS_LIST`, `SLEEP_EVERY_LIST`, and `BACKOFF_OP_LIST`. For `adaptive`, it sweeps `ADAPTIVE_START_SPINS_LIST`, `ADAPTIVE_MEDIUM_SPINS_LIST`, `ADAPTIVE_SMALL_NS_LIST`, `ADAPTIVE_LARGE_NS_LIST`, `SLEEP_EVERY_LIST`, and `BACKOFF_OP_LIST`.
 
-For a longer H100 validation run, the H100 sbatch defaults use:
+The H100 sbatch defaults run a recvsend-focused adaptive comparison:
 
 ```bash
-SIZES=32M,64M,128M,192M
-ITERS=1000
-WARMUP=50
+SIZES=64M,128M,192M
+ITERS=3000
+WARMUP=100
 REPEATS=10
-SLEEP_NS_LIST="32 64 128 256"
-SLEEP_EVERY_LIST="4 8 16"
-BACKOFF_OP_LIST="all recvsend"
+SLEEP_NS_LIST="128"
+SLEEP_EVERY_LIST="8"
+BACKOFF_OP_LIST="recvsend"
+BACKOFF_POLICY_LIST="fixed adaptive"
+ADAPTIVE_START_SPINS_LIST="64 128 256"
+ADAPTIVE_MEDIUM_SPINS_LIST="512 1024"
+ADAPTIVE_SMALL_NS_LIST="32"
+ADAPTIVE_LARGE_NS_LIST="128 256"
 ```
 
 To run a narrower role-targeted follow-up, override the defaults at submit time:
@@ -112,6 +118,7 @@ REPEATS=10 \
 SLEEP_NS_LIST="64" \
 SLEEP_EVERY_LIST="8" \
 BACKOFF_OP_LIST="all recv send recvsend" \
+BACKOFF_POLICY_LIST="fixed" \
 sbatch experiments/nccl_collectives_energy/run_benchmark_h100.sbatch
 ```
 
@@ -157,12 +164,17 @@ The script exports `NCCL_PROTO=Simple` by default so the measured collective pat
 
 ## Backoff Build Flags
 
-The fixed backoff hook is compile-time guarded. Baseline builds are unchanged because the default sleep value is zero.
+The backoff hook is compile-time guarded. Baseline builds use policy `fixed` with sleep value zero.
 
 ```bash
+NCCL_EXPERIMENT_WAIT_BACKOFF_POLICY=<0|1>
 NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS=<ns>
 NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY=<polls>
 NCCL_EXPERIMENT_WAIT_BACKOFF_OP=<0|1|2|3>
+NCCL_EXPERIMENT_WAIT_BACKOFF_START_SPINS=<spins>
+NCCL_EXPERIMENT_WAIT_BACKOFF_MEDIUM_SPINS=<spins>
+NCCL_EXPERIMENT_WAIT_BACKOFF_SMALL_NS=<ns>
+NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS=<ns>
 ```
 
 For example, the automated script builds `sleep_64ns_every8` with:
@@ -171,6 +183,14 @@ For example, the automated script builds `sleep_64ns_every8` with:
 NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS=64
 NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY=8
 NCCL_EXPERIMENT_WAIT_BACKOFF_OP=0
+NCCL_EXPERIMENT_WAIT_BACKOFF_POLICY=0
+```
+
+Policy values:
+
+```text
+0: fixed, sleep NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS every NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY polls
+1: adaptive, busy-spin until START_SPINS, then use SMALL_NS until MEDIUM_SPINS, then LARGE_NS
 ```
 
 `NCCL_EXPERIMENT_WAIT_BACKOFF_OP` selects which Simple `waitPeer()` template shape receives backoff. `BACKOFF_OP_LIST` accepts either the names below or the numeric values:

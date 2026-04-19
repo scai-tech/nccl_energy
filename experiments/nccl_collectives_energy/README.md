@@ -93,16 +93,16 @@ COLLECTIVES="allreduce allgather" \
 For a longer H100 validation run, the H100 sbatch defaults use:
 
 ```bash
-SIZES=64M,128M,256M
+SIZES=32M,64M,128M,192M
 ITERS=1000
 WARMUP=50
 REPEATS=10
 SLEEP_NS_LIST="32 64 128 256"
 SLEEP_EVERY_LIST="4 8 16"
-BACKOFF_OP_LIST="all"
+BACKOFF_OP_LIST="all recvsend"
 ```
 
-After a good fixed sleep setting is identified, run a role-targeted sweep by narrowing sleep parameters and expanding `BACKOFF_OP_LIST`:
+To run a narrower role-targeted follow-up, override the defaults at submit time:
 
 ```bash
 SIZES="64M,128M,256M" \

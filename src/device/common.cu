@@ -11,10 +11,39 @@
 #include "nccl_device.h"
 #include "comm.h"
 
+#ifndef NCCL_EXPERIMENT_WAIT_STATS
+#define NCCL_EXPERIMENT_WAIT_STATS 0
+#endif
+
 __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ < 700
   __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
 #endif
+
+__device__ unsigned long long ncclExperimentWaitStatsCounters
+    [NCCL_EXPERIMENT_WAIT_STATS_OP_COUNT * NCCL_EXPERIMENT_WAIT_STATS_COUNTER_COUNT];
+
+extern "C" __attribute__((visibility("default")))
+ncclResult_t ncclExperimentWaitStatsReset(void) {
+  CUDACHECK(cudaMemsetToSymbol(ncclExperimentWaitStatsCounters, 0,
+                               sizeof(ncclExperimentWaitStatsCounters)));
+  return ncclSuccess;
+}
+
+extern "C" __attribute__((visibility("default")))
+ncclResult_t ncclExperimentWaitStatsRead(ncclExperimentWaitStats_t* stats) {
+  if (stats == nullptr) return ncclInvalidArgument;
+  CUDACHECK(cudaMemcpyFromSymbol(stats->counters, ncclExperimentWaitStatsCounters,
+                                 sizeof(stats->counters)));
+  return ncclSuccess;
+}
+
+extern "C" __attribute__((visibility("default")))
+ncclResult_t ncclExperimentWaitStatsGetEnabled(int* enabled) {
+  if (enabled == nullptr) return ncclInvalidArgument;
+  *enabled = NCCL_EXPERIMENT_WAIT_STATS ? 1 : 0;
+  return ncclSuccess;
+}
 
 struct RunWorkNop {
   __device__ void run() {}

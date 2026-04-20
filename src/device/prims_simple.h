@@ -39,6 +39,10 @@
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS 128
 #endif
 
+#ifndef NCCL_EXPERIMENT_WAIT_STATS
+#define NCCL_EXPERIMENT_WAIT_STATS 0
+#endif
+
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_ALL 0
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_RECV 1
 #define NCCL_EXPERIMENT_WAIT_BACKOFF_OP_SEND 2
@@ -69,25 +73,30 @@
   (NCCL_EXPERIMENT_WAIT_BACKOFF_SMALL_NS > 0 || NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS > 0)
 #endif
 
-__device__ __forceinline__ void ncclExperimentSimpleWaitBackoff(int spins) {
+__device__ __forceinline__ int ncclExperimentSimpleWaitBackoff(int spins) {
 #if NCCL_EXPERIMENT_WAIT_BACKOFF_ENABLED
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
   if (NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY <= 1 ||
       (spins % NCCL_EXPERIMENT_WAIT_BACKOFF_EVERY) == 0) {
 #if NCCL_EXPERIMENT_WAIT_BACKOFF_POLICY == NCCL_EXPERIMENT_WAIT_BACKOFF_POLICY_FIXED
     __nanosleep(NCCL_EXPERIMENT_WAIT_BACKOFF_SLEEP_NS);
+    return 1;
 #else
     if (spins >= NCCL_EXPERIMENT_WAIT_BACKOFF_START_SPINS) {
       const unsigned int sleepNs =
           spins < NCCL_EXPERIMENT_WAIT_BACKOFF_MEDIUM_SPINS
               ? NCCL_EXPERIMENT_WAIT_BACKOFF_SMALL_NS
               : NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS;
-      if (sleepNs > 0) __nanosleep(sleepNs);
+      if (sleepNs > 0) {
+        __nanosleep(sleepNs);
+        return 1;
+      }
     }
 #endif
   }
 #endif
 #endif
+  return 0;
 }
 
 template <int Recv, int Send>
@@ -105,6 +114,26 @@ __device__ __forceinline__ bool ncclExperimentSimpleWaitBackoffApplies() {
 #endif
   return false;
 }
+
+#if NCCL_EXPERIMENT_WAIT_STATS
+extern __device__ unsigned long long ncclExperimentWaitStatsCounters[];
+
+__device__ __forceinline__ void ncclExperimentWaitStatsAdd(int op, int counter,
+                                                           unsigned long long value) {
+  if (value == 0) return;
+  atomicAdd(&ncclExperimentWaitStatsCounters
+                [op * NCCL_EXPERIMENT_WAIT_STATS_COUNTER_COUNT + counter],
+            value);
+}
+
+template <int Recv, int Send>
+__device__ __forceinline__ int ncclExperimentSimpleWaitStatsOp() {
+  if (Recv && Send) return NCCL_EXPERIMENT_WAIT_STATS_OP_RECVSEND;
+  if (Recv) return NCCL_EXPERIMENT_WAIT_STATS_OP_RECV;
+  if (Send) return NCCL_EXPERIMENT_WAIT_STATS_OP_SEND;
+  return NCCL_EXPERIMENT_WAIT_STATS_OP_OTHER;
+}
+#endif
 
 enum primsMode {
   primsModeDefault = 0,
@@ -211,14 +240,36 @@ class Primitives<
     // coverity[dead_error_line]
     if ((flags & (Recv * RoleWaitRecv)) || (flags & (Send * RoleWaitSend))) {
       int spins = 0;
+#if NCCL_EXPERIMENT_WAIT_STATS
+      const int waitStatsOp = ncclExperimentSimpleWaitStatsOp<Recv, Send>();
+      unsigned long long waitStatsPollLoads = 0;
+      unsigned long long waitStatsSleepCalls = 0;
+#endif
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
+#if NCCL_EXPERIMENT_WAIT_STATS
+        waitStatsPollLoads++;
+#endif
         if (ncclExperimentSimpleWaitBackoffApplies<Recv, Send>()) {
+#if NCCL_EXPERIMENT_WAIT_STATS
+          waitStatsSleepCalls += ncclExperimentSimpleWaitBackoff(spins);
+#else
           ncclExperimentSimpleWaitBackoff(spins);
+#endif
         }
         if (checkAbort(flags, Aborted, spins)) break;
         //if (spins == 0) printf("r=%d b=%d t=%d SPUN OUT got=%d want=%d\n", ncclShmem.comm.rank, blockIdx.x, threadIdx.x, int(connStepCache + (isSendNotRecv ? NCCL_STEPS : 0)), int(step+StepPerSlice));
       }
+#if NCCL_EXPERIMENT_WAIT_STATS
+      ncclExperimentWaitStatsAdd(waitStatsOp,
+                                 NCCL_EXPERIMENT_WAIT_STATS_COUNTER_ENTRIES, 1);
+      ncclExperimentWaitStatsAdd(waitStatsOp,
+                                 NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS,
+                                 waitStatsPollLoads);
+      ncclExperimentWaitStatsAdd(waitStatsOp,
+                                 NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS,
+                                 waitStatsSleepCalls);
+#endif
     }
 
     if (flags & (Recv*RoleWaitRecv | Send*RoleWaitSend)) {

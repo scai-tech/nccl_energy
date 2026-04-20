@@ -29,6 +29,7 @@ struct Options {
   std::string modeLabel = "baseline";
   std::string collective = "allreduce";
   bool allowMissingEnergy = false;
+  bool collectWaitStats = true;
 };
 
 struct RunMetrics {
@@ -38,6 +39,9 @@ struct RunMetrics {
   double avgPowerW = 0.0;
   double algBwGBps = 0.0;
   double energyPerGB = 0.0;
+  bool waitStatsEnabled = false;
+  bool hasWaitStats = false;
+  ncclExperimentWaitStats_t waitStats{};
 };
 
 struct Summary {
@@ -138,6 +142,7 @@ void PrintHelp(const char* program) {
       << "  --csv=PATH            Append CSV results to PATH\n"
       << "  --mode-label=NAME     Label stored in logs and CSV (default: baseline)\n"
       << "  --allow-missing-energy=0|1 Continue with energy=NA if NVML energy is unavailable (default: 0)\n"
+      << "  --collect-wait-stats=0|1 Reset/read NCCL wait counters around each repeat (default: 1)\n"
       << "  --help                Print this message\n";
 }
 
@@ -180,6 +185,10 @@ bool ParseArgs(int argc, char** argv, Options* options) {
       int parsed = 0;
       if (!ParseInt(value, &parsed) || (parsed != 0 && parsed != 1)) return false;
       options->allowMissingEnergy = parsed != 0;
+    } else if (GetArgValue(argc, argv, &i, "--collect-wait-stats", &value)) {
+      int parsed = 0;
+      if (!ParseInt(value, &parsed) || (parsed != 0 && parsed != 1)) return false;
+      options->collectWaitStats = parsed != 0;
     } else {
       std::cerr << "Unknown option: " << argv[i] << std::endl;
       return false;
@@ -259,6 +268,47 @@ bool ReadTotalEnergy(const std::vector<NvmlEnergyReader*>& readers,
   return true;
 }
 
+void ResetWaitStatsAll(const std::vector<int>& gpus) {
+  for (int gpu : gpus) {
+    CUDA_CHECK(cudaSetDevice(gpu));
+    NCCL_CHECK(ncclExperimentWaitStatsReset());
+  }
+}
+
+void AddWaitStats(ncclExperimentWaitStats_t* dst,
+                  const ncclExperimentWaitStats_t& src) {
+  for (int op = 0; op < NCCL_EXPERIMENT_WAIT_STATS_OP_COUNT; ++op) {
+    for (int counter = 0; counter < NCCL_EXPERIMENT_WAIT_STATS_COUNTER_COUNT;
+         ++counter) {
+      dst->counters[op][counter] += src.counters[op][counter];
+    }
+  }
+}
+
+ncclExperimentWaitStats_t ReadWaitStatsAll(const std::vector<int>& gpus) {
+  ncclExperimentWaitStats_t total{};
+  for (int gpu : gpus) {
+    ncclExperimentWaitStats_t local{};
+    CUDA_CHECK(cudaSetDevice(gpu));
+    NCCL_CHECK(ncclExperimentWaitStatsRead(&local));
+    AddWaitStats(&total, local);
+  }
+  return total;
+}
+
+uint64_t WaitStatCounter(const ncclExperimentWaitStats_t& stats, int op,
+                         int counter) {
+  return stats.counters[op][counter];
+}
+
+uint64_t WaitStatTotal(const ncclExperimentWaitStats_t& stats, int counter) {
+  uint64_t total = 0;
+  for (int op = 0; op < NCCL_EXPERIMENT_WAIT_STATS_OP_COUNT; ++op) {
+    total += stats.counters[op][counter];
+  }
+  return total;
+}
+
 bool SynchronizeAll(const std::vector<int>& gpus,
                     const std::vector<cudaStream_t>& streams) {
   for (size_t i = 0; i < gpus.size(); ++i) {
@@ -298,9 +348,11 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
                    const std::vector<float*>& sendbuff,
                    const std::vector<float*>& recvbuff,
                    const std::vector<NvmlEnergyReader*>& energyReaders,
-                   size_t bytes, RunMetrics* metrics) {
+                   size_t bytes, bool waitStatsEnabled, RunMetrics* metrics) {
   const size_t count = bytes / sizeof(float);
   if (!SynchronizeAll(options.gpus, streams)) return false;
+  metrics->waitStatsEnabled = waitStatsEnabled;
+  if (options.collectWaitStats) ResetWaitStatsAll(options.gpus);
 
   uint64_t energyStart = 0;
   uint64_t energyStop = 0;
@@ -330,6 +382,10 @@ bool MeasureRepeat(const Options& options, const std::vector<ncclComm_t>& comms,
     CUDA_CHECK(cudaEventSynchronize(stops[i]));
   }
   if (!SynchronizeAll(options.gpus, streams)) return false;
+  if (options.collectWaitStats) {
+    metrics->hasWaitStats = true;
+    metrics->waitStats = ReadWaitStatsAll(options.gpus);
+  }
 
   float elapsedMaxMs = 0.0f;
   for (size_t i = 0; i < options.gpus.size(); ++i) {
@@ -370,7 +426,54 @@ void AppendCsvHeaderIfNeeded(const std::string& path) {
   std::ofstream out(path.c_str(), std::ios::app);
   out << "mode,nranks,gpus,collective,bytes,iters,repeat,elapsed_ms,"
          "per_iter_elapsed_ms,energy_mj,per_iter_energy_mj,avg_power_w,"
-         "alg_bw_GBps,energy_per_GB_mJ\n";
+         "alg_bw_GBps,energy_per_GB_mJ,wait_stats_enabled,"
+         "wait_entries_total,poll_loads_total,sleep_calls_total,"
+         "poll_loads_per_iter,sleep_calls_per_iter,"
+         "wait_entries_other,poll_loads_other,sleep_calls_other,"
+         "wait_entries_recv,poll_loads_recv,sleep_calls_recv,"
+         "wait_entries_send,poll_loads_send,sleep_calls_send,"
+         "wait_entries_recvsend,poll_loads_recvsend,sleep_calls_recvsend\n";
+}
+
+void AppendWaitStatsCsvFields(std::ofstream* out, const Options& options,
+                              const RunMetrics& metrics) {
+  const uint64_t entriesTotal =
+      WaitStatTotal(metrics.waitStats,
+                    NCCL_EXPERIMENT_WAIT_STATS_COUNTER_ENTRIES);
+  const uint64_t pollLoadsTotal =
+      WaitStatTotal(metrics.waitStats,
+                    NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS);
+  const uint64_t sleepCallsTotal =
+      WaitStatTotal(metrics.waitStats,
+                    NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS);
+  const double pollLoadsPerIter =
+      options.iters > 0
+          ? static_cast<double>(pollLoadsTotal) / static_cast<double>(options.iters)
+          : 0.0;
+  const double sleepCallsPerIter =
+      options.iters > 0
+          ? static_cast<double>(sleepCallsTotal) / static_cast<double>(options.iters)
+          : 0.0;
+
+  *out << "," << (metrics.waitStatsEnabled ? 1 : 0) << "," << entriesTotal
+       << "," << pollLoadsTotal << "," << sleepCallsTotal << ","
+       << pollLoadsPerIter << "," << sleepCallsPerIter;
+
+  const int ops[] = {NCCL_EXPERIMENT_WAIT_STATS_OP_OTHER,
+                     NCCL_EXPERIMENT_WAIT_STATS_OP_RECV,
+                     NCCL_EXPERIMENT_WAIT_STATS_OP_SEND,
+                     NCCL_EXPERIMENT_WAIT_STATS_OP_RECVSEND};
+  for (int op : ops) {
+    *out << ","
+         << WaitStatCounter(metrics.waitStats, op,
+                            NCCL_EXPERIMENT_WAIT_STATS_COUNTER_ENTRIES)
+         << ","
+         << WaitStatCounter(metrics.waitStats, op,
+                            NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS)
+         << ","
+         << WaitStatCounter(metrics.waitStats, op,
+                            NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS);
+  }
 }
 
 void AppendCsvRow(const Options& options, size_t bytes, int repeat,
@@ -390,10 +493,12 @@ void AppendCsvRow(const Options& options, size_t bytes, int repeat,
                           : 0.0;
     out << metrics.energyMj << "," << perIterEnergy << ","
         << metrics.avgPowerW << "," << metrics.algBwGBps << ","
-        << metrics.energyPerGB << "\n";
+        << metrics.energyPerGB;
   } else {
-    out << "NA,NA,NA," << metrics.algBwGBps << ",NA\n";
+    out << "NA,NA,NA," << metrics.algBwGBps << ",NA";
   }
+  AppendWaitStatsCsvFields(&out, options, metrics);
+  out << "\n";
 }
 
 void PrintSummary(const std::string& label, const std::vector<double>& values,
@@ -427,7 +532,18 @@ int main(int argc, char** argv) {
             << " warmup=" << options.warmup
             << " repeats=" << options.repeats
             << " allow_missing_energy="
-            << (options.allowMissingEnergy ? 1 : 0) << "\n";
+            << (options.allowMissingEnergy ? 1 : 0)
+            << " collect_wait_stats=" << (options.collectWaitStats ? 1 : 0)
+            << "\n";
+
+  int waitStatsEnabled = 0;
+  NCCL_CHECK(ncclExperimentWaitStatsGetEnabled(&waitStatsEnabled));
+  std::cout << "wait_stats_status compiled_enabled=" << waitStatsEnabled
+            << " collected=" << (options.collectWaitStats ? 1 : 0) << "\n";
+  if (options.collectWaitStats && waitStatsEnabled == 0) {
+    std::cout << "warning wait stats counters are zero because NCCL was not "
+                 "built with NCCL_EXPERIMENT_WAIT_STATS=1\n";
+  }
 
   size_t maxBytes = 0;
   for (size_t bytes : options.sizes) {
@@ -524,11 +640,14 @@ int main(int argc, char** argv) {
     std::vector<double> avgPower;
     std::vector<double> algBw;
     std::vector<double> energyPerGB;
+    std::vector<double> pollLoadsPerIter;
+    std::vector<double> sleepCallsPerIter;
 
     for (int repeat = 0; repeat < options.repeats; ++repeat) {
       RunMetrics metrics;
       if (!MeasureRepeat(options, comms, streams, starts, stops, sendbuff,
-                         recvbuff, energyReaders, bytes, &metrics)) {
+                         recvbuff, energyReaders, bytes,
+                         waitStatsEnabled != 0, &metrics)) {
         return 1;
       }
       elapsed.push_back(metrics.elapsedMs);
@@ -538,6 +657,16 @@ int main(int argc, char** argv) {
         avgPower.push_back(metrics.avgPowerW);
         energyPerGB.push_back(metrics.energyPerGB);
       }
+      const uint64_t pollLoadsTotal =
+          WaitStatTotal(metrics.waitStats,
+                        NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS);
+      const uint64_t sleepCallsTotal =
+          WaitStatTotal(metrics.waitStats,
+                        NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS);
+      pollLoadsPerIter.push_back(
+          static_cast<double>(pollLoadsTotal) / static_cast<double>(options.iters));
+      sleepCallsPerIter.push_back(
+          static_cast<double>(sleepCallsTotal) / static_cast<double>(options.iters));
 
       std::cout << "run mode=" << options.modeLabel
                 << " collective=" << options.collective
@@ -551,7 +680,19 @@ int main(int argc, char** argv) {
       } else {
         std::cout << " energy_mj=NA avg_power_w=NA energy_per_GB_mJ=NA";
       }
-      std::cout << " alg_bw_GBps=" << metrics.algBwGBps << "\n";
+      std::cout << " alg_bw_GBps=" << metrics.algBwGBps
+                << " wait_stats_enabled=" << (metrics.waitStatsEnabled ? 1 : 0)
+                << " poll_loads_total=" << pollLoadsTotal
+                << " sleep_calls_total=" << sleepCallsTotal
+                << " poll_loads_recvsend="
+                << WaitStatCounter(metrics.waitStats,
+                                   NCCL_EXPERIMENT_WAIT_STATS_OP_RECVSEND,
+                                   NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS)
+                << " sleep_calls_recvsend="
+                << WaitStatCounter(metrics.waitStats,
+                                   NCCL_EXPERIMENT_WAIT_STATS_OP_RECVSEND,
+                                   NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS)
+                << "\n";
       AppendCsvRow(options, bytes, repeat, metrics);
     }
 
@@ -563,6 +704,8 @@ int main(int argc, char** argv) {
     PrintSummary("avg_power_w", avgPower, "W");
     PrintSummary("alg_bw_GBps", algBw, "GB/s");
     PrintSummary("energy_per_GB_mJ", energyPerGB, "mJ/GB");
+    PrintSummary("poll_loads_per_iter", pollLoadsPerIter, "loads/iter");
+    PrintSummary("sleep_calls_per_iter", sleepCallsPerIter, "calls/iter");
     std::cout << "summary_end mode=" << options.modeLabel
               << " collective=" << options.collective
               << " bytes=" << bytes << "\n";

@@ -161,6 +161,28 @@ ncclResult_t pncclMemFree(void *ptr);
 ncclResult_t  ncclGetVersion(int *version);
 ncclResult_t pncclGetVersion(int *version);
 
+/* Experimental Simple-protocol waitPeer instrumentation. Counters are per CUDA
+ * device and only increment when NCCL is built with NCCL_EXPERIMENT_WAIT_STATS=1.
+ */
+#define NCCL_EXPERIMENT_WAIT_STATS_OP_OTHER 0
+#define NCCL_EXPERIMENT_WAIT_STATS_OP_RECV 1
+#define NCCL_EXPERIMENT_WAIT_STATS_OP_SEND 2
+#define NCCL_EXPERIMENT_WAIT_STATS_OP_RECVSEND 3
+#define NCCL_EXPERIMENT_WAIT_STATS_OP_COUNT 4
+#define NCCL_EXPERIMENT_WAIT_STATS_COUNTER_ENTRIES 0
+#define NCCL_EXPERIMENT_WAIT_STATS_COUNTER_POLL_LOADS 1
+#define NCCL_EXPERIMENT_WAIT_STATS_COUNTER_SLEEP_CALLS 2
+#define NCCL_EXPERIMENT_WAIT_STATS_COUNTER_COUNT 3
+
+typedef struct ncclExperimentWaitStats {
+  uint64_t counters[NCCL_EXPERIMENT_WAIT_STATS_OP_COUNT]
+                   [NCCL_EXPERIMENT_WAIT_STATS_COUNTER_COUNT];
+} ncclExperimentWaitStats_t;
+
+ncclResult_t ncclExperimentWaitStatsReset(void);
+ncclResult_t ncclExperimentWaitStatsRead(ncclExperimentWaitStats_t* stats);
+ncclResult_t ncclExperimentWaitStatsGetEnabled(int* enabled);
+
 /* Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
  * called once and the Id should be distributed to all ranks in the
  * communicator before calling ncclCommInitRank. */

@@ -23,6 +23,8 @@ OUT_ROOT="${OUT_ROOT:-${SCRIPT_DIR}/outputs/$(date +%Y%m%d_%H%M%S)}"
 NVCC_GENCODE="${NVCC_GENCODE:--gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_90,code=compute_90}"
 JOBS="${JOBS:-${SLURM_CPUS_ON_NODE:-8}}"
 RESULT_PREFIX="${RESULT_PREFIX:-benchmark}"
+WAIT_STATS="${WAIT_STATS:-1}"
+COLLECT_WAIT_STATS="${COLLECT_WAIT_STATS:-1}"
 
 mkdir -p "${OUT_ROOT}"
 
@@ -72,7 +74,8 @@ build_nccl() {
     NCCL_EXPERIMENT_WAIT_BACKOFF_START_SPINS="${adaptive_start}" \
     NCCL_EXPERIMENT_WAIT_BACKOFF_MEDIUM_SPINS="${adaptive_medium}" \
     NCCL_EXPERIMENT_WAIT_BACKOFF_SMALL_NS="${adaptive_small}" \
-    NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS="${adaptive_large}"
+    NCCL_EXPERIMENT_WAIT_BACKOFF_LARGE_NS="${adaptive_large}" \
+    NCCL_EXPERIMENT_WAIT_STATS="${WAIT_STATS}"
 }
 
 build_bench() {
@@ -102,6 +105,7 @@ run_variant() {
         --warmup="${WARMUP}" \
         --repeats="${REPEATS}" \
         --mode-label="${label}" \
+        --collect-wait-stats="${COLLECT_WAIT_STATS}" \
         --csv="${csv_file}" \
       | tee "${log_file}"
   done
@@ -124,6 +128,7 @@ echo "collectives=${COLLECTIVES}"
 echo "nvcc_gencode=${NVCC_GENCODE}"
 echo "jobs=${JOBS}"
 echo "result_prefix=${RESULT_PREFIX}"
+echo "wait_stats=${WAIT_STATS} collect_wait_stats=${COLLECT_WAIT_STATS}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 echo "NCCL_PROTO=${NCCL_PROTO}"
 

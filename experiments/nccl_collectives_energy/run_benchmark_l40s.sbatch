@@ -48,6 +48,8 @@ export ADAPTIVE_SMALL_NS_LIST="${ADAPTIVE_SMALL_NS_LIST:-32}"
 export ADAPTIVE_LARGE_NS_LIST="${ADAPTIVE_LARGE_NS_LIST:-128}"
 export COLLECTIVES="${COLLECTIVES:-allreduce allgather}"
 export NCCL_PROTO="${NCCL_PROTO:-Simple}"
+export WAIT_STATS="${WAIT_STATS:-1}"
+export COLLECT_WAIT_STATS="${COLLECT_WAIT_STATS:-1}"
 
 echo "jobs=${JOBS}"
 echo "result_prefix=${RESULT_PREFIX}"
@@ -65,5 +67,6 @@ echo "adaptive_small_ns_list=${ADAPTIVE_SMALL_NS_LIST}"
 echo "adaptive_large_ns_list=${ADAPTIVE_LARGE_NS_LIST}"
 echo "collectives=${COLLECTIVES}"
 echo "NCCL_PROTO=${NCCL_PROTO}"
+echo "wait_stats=${WAIT_STATS} collect_wait_stats=${COLLECT_WAIT_STATS}"
 
 srun --ntasks=1 ./experiments/nccl_collectives_energy/run_benchmark.sh
